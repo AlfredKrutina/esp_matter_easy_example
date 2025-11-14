@@ -1,0 +1,408 @@
+## Jednotlivé zdrojové soubory - Rychlá reference
+
+---
+
+### `CMakeLists.txt` (Top-level)
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(matter_light_esp32c6)
+```
+
+---
+
+### `main/CMakeLists.txt`
+
+```cmake
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES "esp-matter" "led_driver" "led_strip" "nvs_flash" "esp_wifi" 
+    PRIV_REQUIRES "esp_netif" "esp_event"
+)
+```
+
+---
+
+### `main/main.c`
+
+```c
+#include <stdio.h>
+#include "esp_log.h"
+#include "esp_err.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
+
+#include "esp_matter.h"
+#include "esp_matter_console.h"
+
+#include "led_driver.h"
+#include "matter_config.h"
+
+static const char *TAG = "APP";
+static uint16_t light_endpoint_id = INVALID_ENDPOINT_ID;
+
+// ===== WiFi Callback =====
+static void app_wifi_callback(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG, "WiFi připojeno");
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGE(TAG, "WiFi odpojeno - pokus o reconnect");
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Obdržena IP: " IPSTR, IP2STR(&event->ip_info.ip));
+    }
+}
+
+// ===== Matter Attribute Update Callback =====
+static esp_err_t app_attribute_update_cb(
+    attribute::callback_type_t type,
+    uint16_t endpoint_id,
+    uint32_t cluster_id,
+    uint32_t attribute_id,
+    esp_matter_attr_val_t *val,
+    void *priv_data) {
+    
+    esp_err_t err = ESP_OK;
+
+    if (type == PRE_UPDATE) {
+        if (endpoint_id == light_endpoint_id) {
+            if (cluster_id == on_off::id) {
+                if (attribute_id == on_off::attribute::on_off::id) {
+                    bool on = val->val.b;
+                    led_driver_set_onoff(on);
+                    ESP_LOGI(TAG, "OnOff atribut: %s", on ? "ON" : "OFF");
+                }
+            }
+            else if (cluster_id == level_control::id) {
+                if (attribute_id == level_control::attribute::current_level::id) {
+                    uint8_t level = val->val.u8;
+                    uint8_t brightness = (level > 0) ? ((level * 100) / 254) : 0;
+                    led_driver_set_brightness(brightness);
+                    ESP_LOGI(TAG, "LevelControl atribut: %d/254 (%d%%)", level, brightness);
+                }
+            }
+        }
+    }
+    
+    return err;
+}
+
+// ===== Matter Identification Callback =====
+static esp_err_t app_identification_cb(
+    identification::callback_type_t type,
+    uint16_t endpoint_id,
+    uint8_t effect_id,
+    uint8_t effect_variant,
+    void *priv_data) {
+    
+    ESP_LOGI(TAG, "Identification callback: type=%d, effect=%d", type, effect_id);
+    
+    if (type == identification::callback_type_t::IDENTIFY_START) {
+        led_driver_set_color(0, 255, 0);
+    } else if (type == identification::callback_type_t::IDENTIFY_STOP) {
+        led_driver_set_onoff(false);
+    }
+    
+    return ESP_OK;
+}
+
+// ===== Vytvoření Matter Light Endpoint =====
+static void create_light_endpoint(node::config_t *node_config) {
+    using namespace esp_matter;
+
+    on_off::config_t on_off_config;
+    on_off_config.on_off = false;
+
+    level_control::config_t level_config;
+    level_config.current_level = 200;
+    level_config.level_control_options = 0x00;
+
+    endpoint_t *endpoint = dimmable_light::create(
+        node_config->root,
+        &on_off_config,
+        &level_config,
+        ENDPOINT_FLAG_NONE,
+        NULL
+    );
+
+    if (endpoint == NULL) {
+        ESP_LOGE(TAG, "Selhalo vytvoření light endpointu");
+        return;
+    }
+
+    light_endpoint_id = endpoint::get_id(endpoint);
+    ESP_LOGI(TAG, "Light endpoint vytvořen s ID: %d", light_endpoint_id);
+
+    identification::set_update_callback(app_identification_cb, NULL);
+}
+
+// ===== Matter Node inicializace =====
+static void app_matter_init(void) {
+    using namespace esp_matter;
+
+    node::config_t node_config;
+    node_t *node = node::create(&node_config, app_attribute_update_cb, NULL);
+    
+    if (node == NULL) {
+        ESP_LOGE(TAG, "Selhalo vytvoření Matter nodu");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Matter node vytvořen");
+    create_light_endpoint(&node_config);
+    esp_matter::start(app_attribute_update_cb);
+}
+
+// ===== WiFi inicializace =====
+static void app_wifi_init(void) {
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
+                                               &app_wifi_callback, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
+                                               &app_wifi_callback, NULL));
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASSWORD,
+            .scan_method = WIFI_ALL_CHANNEL_SCAN,
+            .bssid_set = false,
+            .channel = 0,
+            .listen_interval = 0,
+            .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
+        },
+    };
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT40);
+    
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_LOGI(TAG, "WiFi inicializováno");
+}
+
+// ===== Main aplikace =====
+void app_main(void) {
+    esp_err_t ret = ESP_OK;
+
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGE(TAG, "NVS flash vyžaduje erase");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS inicializováno");
+
+    ESP_ERROR_CHECK(led_driver_init());
+    app_wifi_init();
+    app_matter_init();
+    esp_matter_console_init();
+
+    ESP_LOGI(TAG, "Aplikace spuštěna. Commissioning PIN: %06ld",
+             (long)MATTER_PIN_CODE);
+}
+```
+
+---
+
+### `components/led_driver/CMakeLists.txt`
+
+```cmake
+idf_component_register(
+    SRCS "led_driver.c"
+    INCLUDE_DIRS "include"
+    REQUIRES "led_strip" "esp_common"
+)
+```
+
+---
+
+### `components/led_driver/include/led_driver.h`
+
+```c
+#ifndef LED_DRIVER_H
+#define LED_DRIVER_H
+
+#include "esp_err.h"
+#include "stdint.h"
+
+#define LED_GPIO_NUM 8
+#define LED_STRIP_RMT_RES_HZ (10 * 1000 * 1000)
+
+typedef void* led_driver_handle_t;
+
+esp_err_t led_driver_init(void);
+void led_driver_set_color(uint8_t r, uint8_t g, uint8_t b);
+void led_driver_set_brightness(uint8_t brightness);
+void led_driver_set_onoff(bool on);
+esp_err_t led_driver_deinit(void);
+
+#endif // LED_DRIVER_H
+```
+
+---
+
+### `components/led_driver/led_driver.c`
+
+```c
+#include "led_driver.h"
+#include "led_strip.h"
+#include "esp_log.h"
+
+static const char *TAG = "LED_DRIVER";
+static led_strip_handle_t led_strip = NULL;
+static uint8_t current_r = 0, current_g = 0, current_b = 0;
+
+esp_err_t led_driver_init(void) {
+    esp_err_t ret = ESP_OK;
+    
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = LED_GPIO_NUM,
+        .max_leds = 1,
+        .led_pixel_format = LED_PIXEL_FORMAT_GRB,
+        .led_model = LED_MODEL_WS2812,
+        .flags.invert_out = false,
+    };
+
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = LED_STRIP_RMT_RES_HZ,
+        .flags.with_dma = false,
+    };
+
+    ret = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Selhala inicializace LED: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "LED driver inicializován");
+    led_driver_set_onoff(false);
+    
+    return ESP_OK;
+}
+
+void led_driver_set_color(uint8_t r, uint8_t g, uint8_t b) {
+    if (led_strip == NULL) {
+        return;
+    }
+    
+    current_r = r;
+    current_g = g;
+    current_b = b;
+    
+    led_strip_set_pixel(led_strip, 0, r, g, b);
+    led_strip_refresh(led_strip);
+    
+    ESP_LOGD(TAG, "Barva nastavena: R=%d, G=%d, B=%d", r, g, b);
+}
+
+void led_driver_set_brightness(uint8_t brightness) {
+    if (brightness > 100) {
+        brightness = 100;
+    }
+    
+    uint8_t scaled = (brightness * 255) / 100;
+    
+    uint8_t r = (current_r * scaled) / 255;
+    uint8_t g = (current_g * scaled) / 255;
+    uint8_t b = (current_b * scaled) / 255;
+    
+    led_driver_set_color(r, g, b);
+    ESP_LOGD(TAG, "Jas nastaven: %d%%", brightness);
+}
+
+void led_driver_set_onoff(bool on) {
+    if (on) {
+        led_driver_set_color(255, 255, 255);
+        ESP_LOGI(TAG, "LED zapnuta");
+    } else {
+        led_driver_set_color(0, 0, 0);
+        ESP_LOGI(TAG, "LED vypnuta");
+    }
+}
+
+esp_err_t led_driver_deinit(void) {
+    if (led_strip != NULL) {
+        led_strip_del(led_strip);
+        led_strip = NULL;
+    }
+    return ESP_OK;
+}
+```
+
+---
+
+### `components/matter_config/CMakeLists.txt`
+
+```cmake
+idf_component_register(
+    INCLUDE_DIRS "."
+)
+```
+
+---
+
+### `components/matter_config/matter_config.h`
+
+```c
+#ifndef MATTER_CONFIG_H
+#define MATTER_CONFIG_H
+
+#define MATTER_DEVICE_NAME "Matter LED Lamp"
+#define MATTER_DEVICE_TYPE "On/Off Light"
+
+#define WIFI_SSID "YOUR_SSID"
+#define WIFI_PASSWORD "YOUR_PASSWORD"
+
+#define MATTER_PIN_CODE 20202020
+#define MATTER_DISCRIMINATOR 3840
+
+#define MATTER_COMMISSIONING_TIMEOUT 15000
+#define MATTER_COMMISSIONING_WINDOW 900
+
+#endif // MATTER_CONFIG_H
+```
+
+---
+
+### `sdkconfig.defaults`
+
+```
+CONFIG_IDF_TARGET=esp32c6
+CONFIG_USE_ESP_MATTER=y
+CONFIG_ESP_WIFI_MODE_AP=y
+CONFIG_ESP_WIFI_SSID_HIDDEN=n
+CONFIG_LOG_DEFAULT_LEVEL=3
+CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y
+CONFIG_LED_STRIP_CHIPSET_WS2812=y
+CONFIG_NVS_ENCRYPTION_ENABLED=y
+CONFIG_FREERTOS_TICK_RATE_HZ=1000
+```
+
+---
+
+### `partitions.csv`
+
+```
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 2M,
+```

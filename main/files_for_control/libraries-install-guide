@@ -1,0 +1,412 @@
+# Kompletní Seznam Knihoven a Managed Components
+
+## 🎯 OBSAH
+1. Systémové předpoklady
+2. ESP-IDF Setup
+3. ESP-Matter Setup
+4. Managed Components (automaticky stahovány)
+5. Příkazy pro instalaci
+6. Verifikace instalace
+7. Troubleshooting
+
+---
+
+## 1. SYSTÉMOVÉ PŘEDPOKLADY
+
+### Linux (Ubuntu 20.04/22.04)
+```bash
+sudo apt-get install git gcc g++ pkg-config libssl-dev libdbus-1-dev \
+    libglib2.0-dev libavahi-client-dev ninja-build python3-venv python3-dev \
+    python3-pip unzip libgirepository1.0-dev libcairo2-dev libreadline-dev
+```
+
+### macOS
+```bash
+brew install gcc g++ pkg-config openssl dbus glib avahi libffi cairo python3
+```
+
+---
+
+## 2. ESP-IDF SETUP (VÝCHOZÍ)
+
+### Verze: 5.2.x nebo 5.3.x (doporučeno pro ESP32-C6)
+
+```bash
+# Klonovat ESP-IDF
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+
+# Nastavit na konkrétní verzi (doporučeno v5.2.2)
+git checkout v5.2.2
+git submodule update --init --recursive
+
+# Instalace
+./install.sh
+
+# Nastavit environment (pokaždé v novém terminálu)
+cd esp-idf
+source ./export.sh
+cd ..
+```
+
+---
+
+## 3. ESP-MATTER SETUP (KLÍČOVÉ PRO PROJEKT)
+
+### Volba A: Plná instalace (doporučena)
+
+```bash
+# Klonovat esp-matter s submoduly
+git clone --depth 1 https://github.com/espressif/esp-matter.git
+cd esp-matter
+
+# Inicializovat submoduly
+git submodule update --init --depth 1
+
+# Pro Matter device nástrojů
+cd ./connectedhomeip/connectedhomeip
+./scripts/checkout_submodules.py --platform esp32 linux --shallow
+cd ../..
+
+# Instalace esp-matter (obsahuje všechny potřebné kompilátory)
+./install.sh
+
+# Nastavit environment (pokaždé v novém terminálu)
+cd esp-matter
+source ./export.sh
+cd ..
+```
+
+### Volba B: Managed Component (experimental - pro jednoduchý projekt)
+
+Pokud máte POUZE egyszer projekt bez Matter nástrojů:
+```bash
+cd /path/to/your/project
+idf.py add-dependency "espressif/esp_matter^1.4.0"
+```
+
+---
+
+## 4. MANAGED COMPONENTS (AUTOMATICKY STAHOVÁNY)
+
+Tyto komponenty se automaticky stahují během `idf.py build` když je projekt správně nakonfigurován.
+
+### Primární komponenty pro VAŠ projekt:
+
+| Komponenta | Verze | Účel |
+|-----------|-------|------|
+| **esp-matter** | 1.4.0+ | Matter framework a protokol |
+| **led_strip** | 2.5.x+ | RMT driver pro WS2812B LED |
+| **esp_common** | - | Základní ESP komponenty |
+| **nvs_flash** | - | Non-volatile storage (Matter data) |
+
+### Vedlejší komponenty (automaticky):
+
+| Komponenta | Účel |
+|-----------|------|
+| **cbor** | Serialization pro Matter |
+| **esp_diagnostics** | Diagnostika a logování |
+| **esp_diag_data_store** | Ukládání diagnostických dat |
+| **button** | GPIO handle (optional) |
+
+---
+
+## 5. PŘÍKAZY PRO INSTALACI - KROK ZA KROKEM
+
+### Krok 1: Instalace základu (jednou)
+
+```bash
+# Domovský adresář
+mkdir -p ~/esp
+cd ~/esp
+
+# ESP-IDF
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+git checkout v5.2.2
+./install.sh
+source ./export.sh
+cd ..
+
+# ESP-Matter
+git clone --depth 1 https://github.com/espressif/esp-matter.git
+cd esp-matter
+git submodule update --init --depth 1
+cd ./connectedhomeip/connectedhomeip
+./scripts/checkout_submodules.py --platform esp32 linux --shallow
+cd ../..
+./install.sh
+source ./export.sh
+cd ..
+```
+
+### Krok 2: Příprava nového projektu
+
+```bash
+# Vytvořit adresář projektu
+mkdir -p ~/projects/matter-light-esp32c6
+cd ~/projects/matter-light-esp32c6
+
+# Nastavit ESP-IDF
+cd ~/esp/esp-idf
+source ./export.sh
+cd ~/projects/matter-light-esp32c6
+
+# Nastavit ESP-Matter
+cd ~/esp/esp-matter
+source ./export.sh
+cd ~/projects/matter-light-esp32c6
+```
+
+### Krok 3: Kopírovat moje poskytované soubory do projektu
+
+```bash
+# Struktura:
+matter-light-esp32c6/
+├── CMakeLists.txt
+├── main/
+│   ├── CMakeLists.txt
+│   ├── main.c
+├── components/
+│   ├── led_driver/
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   │   └── led_driver.h
+│   │   └── led_driver.c
+│   └── matter_config/
+│       ├── CMakeLists.txt
+│       └── matter_config.h
+├── sdkconfig.defaults
+└── partitions.csv
+```
+
+### Krok 4: Stahnout managed components a buildovat
+
+```bash
+cd ~/projects/matter-light-esp32c6
+
+# Nastavit cílový chip
+idf.py set-target esp32c6
+
+# Vytvoření idf_component.yml (pro managed components)
+idf.py create-manifest
+
+# Reconfigurovat projekt (stáhne managed components)
+idf.py reconfigure
+
+# Ověřit, že se stáhly komponenty
+ls -la managed_components/
+
+# Konfigurovat projekt
+idf.py menuconfig
+# → Example Configuration → Set YOUR_SSID, YOUR_PASSWORD
+
+# Build
+idf.py build
+
+# Flash
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+---
+
+## 6. OVĚŘENÍ INSTALACE
+
+### Kontrola ESP-IDF
+```bash
+cd ~/esp/esp-idf
+source ./export.sh
+idf.py --version
+# Měl by vypsat: ESP-IDF v5.2.2
+```
+
+### Kontrola ESP-Matter
+```bash
+cd ~/esp/esp-matter
+source ./export.sh
+which idf.py
+# Měl by vypsat cestu k esp-matter/tools/idf.py
+```
+
+### Kontrola managed components
+```bash
+cd ~/projects/matter-light-esp32c6
+idf.py build 2>&1 | grep -i "Processing.*dependencies"
+# Měl by vypsat seznam stahovaných komponent
+```
+
+### Kontrola LED knihovny
+```bash
+find ~/esp/esp-idf -name "led_strip.h" | head -1
+# Měl by vypsat: /path/to/esp-idf/components/led_strip/include/led_strip.h
+```
+
+---
+
+## 7. ENVIRONMENT SETUP SCRIPT (DOPORUČENO)
+
+Vytvořit soubor `~/.bashrc` nebo `~/.zshrc`:
+
+```bash
+# Matter Development Environment
+export ESP_HOME="$HOME/esp"
+
+get_matter() {
+    cd "$ESP_HOME/esp-idf"
+    source ./export.sh
+    cd "$ESP_HOME/esp-matter"
+    source ./export.sh
+    echo "✓ Matter environment ready"
+}
+
+# Alternativně: automatické nastavení
+if [ -f "$ESP_HOME/esp-idf/export.sh" ]; then
+    . "$ESP_HOME/esp-idf/export.sh" > /dev/null 2>&1
+fi
+if [ -f "$ESP_HOME/esp-matter/export.sh" ]; then
+    . "$ESP_HOME/esp-matter/export.sh" > /dev/null 2>&1
+fi
+```
+
+Pak v terminálu:
+```bash
+source ~/.bashrc
+# nebo
+source ~/.zshrc
+```
+
+---
+
+## 8. PROBLÉMOVÉ ŘEŠENÍ
+
+### Problém: "espressif/esp_matter not found"
+**Řešení**: Ujistit se, že máte ESP-Matter repository, ne jen komponentu
+```bash
+cd ~/esp/esp-matter
+git status  # Měl by vypsat Matter repo, ne managed component
+```
+
+### Problém: "led_strip.h: No such file"
+**Řešení**: Komponenta led_strip není automaticky stažena
+```bash
+idf.py add-dependency "espressif/led_strip"
+idf.py reconfigure
+```
+
+### Problém: "CMake version 3.5 or higher required"
+**Řešení**: Aktualizovat CMake
+```bash
+pip install --upgrade cmake
+```
+
+### Problém: "CHIP not found" během build
+**Řešení**: esp-matter instalace neproběhla správně
+```bash
+cd ~/esp/esp-matter
+./install.sh --no-host-tool  # Rychlejší varianta
+```
+
+### Problém: "GCC ARM version mismatch"
+**Řešení**: Přeinstalovat toolchain
+```bash
+cd ~/esp/esp-idf
+./install.sh --reinstall
+```
+
+---
+
+## 9. QUICK START (PRO ZKUŠENÉ)
+
+```bash
+# Setup (jednou)
+cd ~/esp
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf && git checkout v5.2.2 && ./install.sh
+cd ..
+git clone --depth 1 https://github.com/espressif/esp-matter.git
+cd esp-matter && git submodule update --init --depth 1
+cd ./connectedhomeip/connectedhomeip
+./scripts/checkout_submodules.py --platform esp32 linux --shallow
+cd ../.. && ./install.sh
+
+# Project (pokaždé)
+cd ~/esp/esp-idf && source ./export.sh
+cd ~/esp/esp-matter && source ./export.sh
+cd ~/projects/matter-light-esp32c6
+idf.py set-target esp32c6
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+---
+
+## 10. PŘÍLOHA: MANAGED COMPONENTS MANUÁLNÍ INSTALACE
+
+Pokud `idf.py build` selže na chybějících komponentách, instalujte ručně:
+
+```bash
+cd ~/projects/matter-light-esp32c6
+
+# LED Strip
+idf.py add-dependency "espressif/led_strip"
+
+# CBOR (pro Matter serialization)
+idf.py add-dependency "espressif/cbor"
+
+# Matter (pokud není v esp-matter)
+idf.py add-dependency "espressif/esp_matter^1.4.0"
+
+# Update dependencies
+idf.py update-dependencies
+
+# Reconfigure
+idf.py reconfigure
+```
+
+Po tom by měl být seznam v `dependencies.lock`:
+
+```
+espressif/led_strip: 2.5.x
+espressif/cbor: 0.6.0~1
+espressif/esp_matter: 1.4.0+
+```
+
+---
+
+## 11. OVĚŘENÍ FINÁLNÍ FUNKČNOSTI
+
+```bash
+# 1. Přejít na projekt
+cd ~/projects/matter-light-esp32c6
+
+# 2. Clean build
+rm -rf build/ dependencies.lock managed_components/
+idf.py fullclean
+
+# 3. Reconfigure
+idf.py set-target esp32c6
+idf.py reconfigure
+
+# 4. Ověřit managed components
+ls -la managed_components/
+# Měl by vypsat: led_strip/, cbor/, esp_matter/
+
+# 5. Build s verbosním loggingem
+idf.py build 2>&1 | tee build.log
+
+# 6. Ověřit linking
+grep -i "error" build.log | grep -i "led_strip\|matter\|cbor"
+# Pokud nic není vypsáno → ✓ OK
+
+# 7. Flash a test
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+Pokud vidíte v logu:
+```
+I (xxx) LED_DRIVER: LED driver inicializován
+I (xxx) APP: Matter node vytvořen
+I (xxx) APP: WiFi inicializováno
+```
+
+→ **✓ VŠE FUNGUJE!**

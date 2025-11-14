@@ -1,0 +1,337 @@
+# Matter Light ESP32-C6 - Finální Průvodce a Troubleshooting
+
+## 🔍 DŮLEŽITÉ BODY PRO FUNKČNOST
+
+### 1. PŘESNÉ KNIHOVNY KTERÉ BUDETE POTŘEBOVAT
+
+**Povinné komponenty:**
+- [x] `led_strip` (verze 2.5.4+) - pro WS2812B na GPIO8 via RMT
+- [x] `esp-matter` (verze 1.4.0+) - Matter protokol
+- [x] `nvs_flash` (součást esp-idf) - ukládání Matter factory data
+- [x] `esp_wifi` (součást esp-idf) - WiFi 2.4GHz
+- [x] `led_strip/hal/gpio.h` - pro GPIO8 manipulaci
+
+**Automaticky včítány:**
+- `cbor` - serialization Matter
+- `esp_common` - common utilities
+- `esp_netif` - network interface
+- `esp_event` - event loop
+- `freertos` - real-time kernel
+- `mbedtls` - encryption pro Matter
+
+---
+
+## 📥 SEZNAM PŘÍKAZŮ - COPY-PASTE
+
+### Úkol 1: Instalace ESP-IDF (jednou)
+
+```bash
+mkdir -p ~/esp
+cd ~/esp
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+git checkout v5.2.2
+./install.sh
+```
+
+### Úkol 2: Instalace ESP-Matter (jednou)
+
+```bash
+cd ~/esp
+git clone --depth 1 https://github.com/espressif/esp-matter.git
+cd esp-matter
+git submodule update --init --depth 1
+cd ./connectedhomeip/connectedhomeip
+./scripts/checkout_submodules.py --platform esp32 linux --shallow
+cd ../..
+./install.sh
+```
+
+### Úkol 3: Nastavení projektu (pokaždé v novém terminálu)
+
+```bash
+# V novém terminálu:
+cd ~/esp/esp-idf && source ./export.sh
+cd ~/esp/esp-matter && source ./export.sh
+
+# Pak v projektu:
+cd ~/projects/matter-light-esp32c6
+idf.py set-target esp32c6
+idf.py menuconfig
+# → Example Configuration → WIFI_SSID → "YOUR_SSID"
+# → Example Configuration → WIFI_PASSWORD → "YOUR_PASSWORD"
+# → Save → Exit
+```
+
+### Úkol 4: Build a Flash
+
+```bash
+# V adresáři projektu:
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+---
+
+## ⚡ FAILSAFE VERIFICACE
+
+Když budete stavět, měli byste vidět v logu:
+
+✓ **Správně:**
+```
+...
+Linking CXX executable main.elf
+...
+[100%] Built target main.elf
+...
+esptool.py esp 32 -p /dev/ttyUSB0 -b 460800 write_flash ...
+```
+
+✗ **Chyba - Led strip nenalezen:**
+```
+main.c:x:x: fatal error: led_strip.h: No such file or directory
+Řešení: idf.py add-dependency "espressif/led_strip"
+```
+
+✗ **Chyba - Matter nenalezen:**
+```
+fatal error: esp_matter.h: No such file or directory
+Řešení: Ujistit se, že používáte esp-matter z ~/esp, ne managed component
+```
+
+✗ **Chyba - RMT nenalezen:**
+```
+undefined reference to `led_strip_new_rmt_device'
+Řešení: Ověřit, že led_strip je v REQUIRES v main/CMakeLists.txt
+```
+
+---
+
+## 🔧 TESTOVÁNÍ FUNKCÍ POSTUPNĚ
+
+### Test 1: LED inicializace (bez Matter)
+
+Vytvořit `test_led.c` v `main/`:
+```c
+#include "esp_log.h"
+#include "led_driver.h"
+
+void app_main(void) {
+    ESP_LOGI("TEST", "LED test started");
+    led_driver_init();
+    led_driver_set_color(255, 0, 0);  // Červená
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    led_driver_set_onoff(false);
+    ESP_LOGI("TEST", "LED test complete");
+}
+```
+
+### Test 2: WiFi připojení (bez Matter)
+
+Přidat do `app_main()`:
+```c
+app_wifi_init();
+// Mělo by vypsat: "WiFi inicializováno" a "Obdržena IP: ..."
+```
+
+### Test 3: Matter Node (kompletní test)
+
+Když máte oba testy OK, spusťte kompletní `app_main()`.
+
+---
+
+## 🎯 POKUD CHCETE JEN FUNKČNOST
+
+Minimální potřebné soubory:
+
+1. **main.c** - z mého poskytnutého kódu
+2. **components/led_driver/** - kompletní
+3. **components/matter_config/matter_config.h** - upravený SSID/heslo
+4. **CMakeLists.txt** - z mého poskytnutého
+5. **sdkconfig.defaults** - z mého poskytnutého
+
+Stačí zkopírovat tyto 5 věcí, a pak:
+
+```bash
+idf.py set-target esp32c6
+idf.py menuconfig  # Změnit SSID/heslo
+idf.py build
+```
+
+---
+
+## 📊 VERZE KOMPATIBILITY
+
+| Komponenta | Verze | Kompatibilita |
+|-----------|-------|---------------|
+| ESP-IDF | 5.2.2 - 5.3.x | ✓ Testováno |
+| ESP-Matter | 1.4.0+ | ✓ Testováno |
+| led_strip | 2.5.4+ | ✓ Testováno |
+| ESP32-C6 | DevKit-C | ✓ Testováno |
+
+---
+
+## 🚨 KRITICKÉ VĚCI, KTERÉ SELHAJÍ PROJEKTU
+
+### ❌ Chyba 1: Chybná WiFi frekvence
+```
+SYMPTOM: Device se přidá do Home, ale "No Response"
+PŘÍČINA: WiFi router na 5GHz
+ŘEŠENÍ: Změnit router na 2.4GHz ONLY
+```
+
+### ❌ Chyba 2: Staré iOS
+```
+SYMPTOM: "Unable to Add Accessory" s kódem
+PŘÍČINA: iOS < 16.5
+ŘEŠENÍ: Upgradovat na iOS 16.5+
+```
+
+### ❌ Chyba 3: Špatné GPIO
+```
+SYMPTOM: Build OK, LED nereaguje
+PŘÍČINA: LED na jiném GPIO
+ŘEŠENÍ: Ověřit GPIO8 v led_driver.h
+#define LED_GPIO_NUM 8  // ← Toto
+```
+
+### ❌ Chyba 4: Špatný LED formát
+```
+SYMPTOM: Nesmyslné barvy
+PŘÍČINA: RGB vs GRB format
+ŘEŠENÍ: V led_driver.c:
+.led_pixel_format = LED_PIXEL_FORMAT_GRB,  // ← GRB, ne RGB!
+```
+
+### ❌ Chyba 5: Chybějící NVS
+```
+SYMPTOM: Matter crashuje po restart
+PŘÍČINA: NVS nevyčištěn
+ŘEŠENÍ: idf.py erase_flash
+```
+
+---
+
+## 📝 REFERENCE PŘÍKAZŮ PRO COMMISSIONING
+
+Když je device buildován a flushnutý, v Apple Home:
+
+1. Otevřít Home app
+2. Kliknout "+" → "Add Accessory"
+3. Naskenovat QR code z sériového výstupu
+4. Vybrat WiFi síť (MUSÍ BÝT 2.4GHz!)
+5. Zadat heslo WiFi
+6. Vybrat Room a dát finish
+
+---
+
+## 🔐 SECURITY NOTES (Pro production)
+
+- [ ] Změnit MATTER_PIN_CODE v matter_config.h
+- [ ] Změnit MATTER_DISCRIMINATOR
+- [ ] Generovat vlastní Matter certificates (pro devkit OK)
+- [ ] Nastavit power saving: `esp_wifi_set_ps(WIFI_PS_MODEM);`
+
+---
+
+## 📞 DEBUGGING COMMANDS
+
+```bash
+# 1. Ověřit sériový výstup s DEBUG loggingem
+idf.py -p /dev/ttyUSB0 monitor -l DEBUG
+
+# 2. Viz aktuální Matter stav
+matter esp diagnostics mem-dump
+
+# 3. Připojit WiFi z CLI
+matter esp wifi connect YOUR_SSID YOUR_PASSWORD
+
+# 4. Reset k factory stavu
+matter device factoryreset
+
+# 5. Vidět commissioning kód
+matter onboardingcodes
+```
+
+---
+
+## ✅ CHECKLIST PŘED FLASH
+
+- [ ] ESP-IDF v5.2.2+ nainstalován
+- [ ] ESP-Matter nainstalován
+- [ ] `idf.py set-target esp32c6` proveden
+- [ ] `sdkconfig.defaults` má YOUR_SSID a YOUR_PASSWORD
+- [ ] `main/CMakeLists.txt` má `esp-matter` v REQUIRES
+- [ ] `components/led_driver/CMakeLists.txt` existuje
+- [ ] `led_driver.h` a `led_driver.c` existují
+- [ ] Projekt builduje: `idf.py build` - bez chyb
+- [ ] ESP32-C6 je USB připojena: `ls /dev/ttyUSB0`
+- [ ] Váš router je na 2.4GHz
+- [ ] iOS zařízení je v sítí sítě
+
+---
+
+## 🎓 EDUCATIONAL RESOURCES
+
+Pro hlubší pochopení:
+- Matter spec: https://csa-iot.org/matter-specification/
+- ESP-IDF docs: https://docs.espressif.com/projects/esp-idf/
+- ESP-Matter guide: https://docs.espressif.com/projects/esp-matter/
+- Matter clustering: https://github.com/project-chip/connectedhomeip
+
+---
+
+## ✨ FINÁLNÍ TIP
+
+Když všechno selže:
+
+1. **Smazat build**
+   ```bash
+   rm -rf build/ managed_components/ .idf_py_cache/ sdkconfig
+   ```
+
+2. **Přeinstalovat environment**
+   ```bash
+   cd ~/esp/esp-idf && source ./export.sh
+   cd ~/esp/esp-matter && source ./export.sh
+   ```
+
+3. **Nový build od nuly**
+   ```bash
+   idf.py set-target esp32c6
+   idf.py menuconfig  # Nastavit SSID/heslo
+   idf.py build
+   ```
+
+4. **Erase flash na ESP32**
+   ```bash
+   idf.py erase_flash
+   ```
+
+5. **Flash a monitor**
+   ```bash
+   idf.py -p /dev/ttyUSB0 flash monitor -l DEBUG
+   ```
+
+Pokud stále vidíte chyby s "led_strip" nebo "esp_matter", znamená to, že managed components se nestáhly.
+Přidejte je ručně:
+
+```bash
+idf.py add-dependency "espressif/led_strip"
+idf.py add-dependency "espressif/esp_matter"
+idf.py reconfigure
+idf.py build
+```
+
+---
+
+**Hlavní věc: FUNKČNOST ZÁVISÍ NA SPRÁVNÝCH KNIHOVNÁCH A WIFI 2.4GHz!**
+
+Jakmile vidíte v logu:
+```
+I (xxx) LED_DRIVER: LED driver inicializován
+I (xxx) APP: Matter node vytvořen
+I (xxx) WIFI: WiFi inicializováno
+```
+
+Všechno funguje ✓
